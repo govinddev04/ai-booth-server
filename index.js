@@ -37,7 +37,13 @@ mongoose.connect(MONGO_URI, {
     console.error('❌ MongoDB connection error:', err.message);
     console.error('Check your MONGO_URI and network connection.');
   });
+app.get("/", (req, res) => {
+  res.send("Backend is running");
+});
 
+app.get("/health", (req, res) => {
+  res.json({ ok: true });
+});
 // Schema
 const userSchema = new mongoose.Schema({
   fullName: String,
