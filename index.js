@@ -11,8 +11,7 @@ const twilio = require('twilio');
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 5000;
-
+const PORT = process.env.PORT || 8080;
 // Proper CORS for production
 app.use(cors({
   origin: '*', // You can restrict this later to your Vercel URL
