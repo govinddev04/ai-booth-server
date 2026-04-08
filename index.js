@@ -70,7 +70,7 @@ app.post('/api/register-simple', async (req, res) => {
     }
     const newUser = new User({ fullName, phone, gmail });
     await newUser.save();
-    res.status(201).json({ user: newUser, message: 'Login successful' });
+    res.status(201).json({ user: newUser, message: 'Registration successful' });
   } catch (error) {
     console.error('Registration error:', error);
     res.status(500).json({ message: 'Internal server error' });
