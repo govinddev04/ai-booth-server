@@ -26,15 +26,22 @@ if (!fs.existsSync('./uploads')) {
 }
 
 // MongoDB Connection
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/ai-booth';
+const MONGO_URI = process.env.MONGO_URI;
+
 console.log('Attempting to connect to MongoDB...');
+
+if (!MONGO_URI) {
+  console.error('❌ MONGO_URI is missing in Railway Variables');
+  process.exit(1);
+}
+
 mongoose.connect(MONGO_URI, {
-  serverSelectionTimeoutMS: 5000 // 5 seconds timeout
+  serverSelectionTimeoutMS: 10000
 })
   .then(() => console.log('✅ Connected to MongoDB Successfully'))
   .catch(err => {
     console.error('❌ MongoDB connection error:', err.message);
-    console.error('Check your MONGO_URI and network connection.');
+    process.exit(1);
   });
 app.get("/", (req, res) => {
   res.send("Backend is running");
