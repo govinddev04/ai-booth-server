@@ -15,11 +15,20 @@ const PORT = process.env.PORT || 8080;
 
 // Proper CORS for production
 app.use(cors({
-  origin: '*', // You can restrict this later to your Vercel URL
+  origin: '*',
   methods: ['GET', 'POST']
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Health Check Routes
+app.get("/", (req, res) => {
+  res.send("Backend is live");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({ ok: true });
+});
 
 // Ensure uploads folder exists
 if (!fs.existsSync('./uploads')) {
@@ -32,26 +41,18 @@ const MONGO_URI = process.env.MONGO_URI;
 console.log('Attempting to connect to MongoDB...');
 
 if (!MONGO_URI) {
-  console.error('❌ MONGO_URI is missing in Railway Variables');
+  console.error('MONGO_URI is missing in environment variables');
   process.exit(1);
 }
 
 mongoose.connect(MONGO_URI, {
   serverSelectionTimeoutMS: 10000
 })
-  .then(() => console.log('✅ Connected to MongoDB Successfully'))
+  .then(() => console.log('Connected to MongoDB Successfully'))
   .catch(err => {
-    console.error('❌ MongoDB connection error:', err.message);
+    console.error('MongoDB connection error:', err.message);
     process.exit(1);
   });
-
-app.get("/", (req, res) => {
-  res.send("Backend is running");
-});
-
-app.get("/health", (req, res) => {
-  res.json({ ok: true });
-});
 
 // Schema
 const userSchema = new mongoose.Schema({
@@ -63,6 +64,31 @@ const userSchema = new mongoose.Schema({
 });
 
 const User = mongoose.model('User', userSchema);
+
+// ✅ FIXED: Reuse Nodemailer transporter with CORRECT SMTP config
+const transporter = nodemailer.createTransport({
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  pool: true,
+  maxConnections: 5,
+  maxMessages: 100,
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS
+  },
+  timeout: 60000,
+  connectionTimeout: 60000
+});
+
+// ✅ Verify transporter connection
+transporter.verify((error, success) => {
+  if (error) {
+    console.error('❌ Gmail Transporter Error:', error.message);
+  } else {
+    console.log('✅ Gmail Transporter Ready - Connection Pool Active');
+  }
+});
 
 // Registration Route
 app.post('/api/register-simple', async (req, res) => {
@@ -111,20 +137,12 @@ async function sendEmailWithPhoto(fullName, phone, toEmail, photoPath) {
     return false;
   }
 
-  const transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: {
-      user: process.env.GMAIL_USER,
-      pass: process.env.GMAIL_PASS
-    }
-  });
-
   const fullPath = path.join(__dirname, photoPath);
 
   await transporter.sendMail({
-    from: process.env.GMAIL_USER,
+    from: `"AI Booth" <${process.env.GMAIL_USER}>`,
     to: toEmail,
-    subject: 'Your AI Booth Photo',
+    subject: 'Your AI Booth Photo 📸',
     text: `Hello ${fullName},\n\nThank you for using AI Booth! Here is your photo.`,
     attachments: [{ filename: 'photo.png', path: fullPath }]
   });
@@ -133,15 +151,12 @@ async function sendEmailWithPhoto(fullName, phone, toEmail, photoPath) {
 
 // Helper function for sending WhatsApp with Photo Link (Twilio API)
 async function sendWhatsAppWithPhoto(fullName, phone, toPhone, photoUrl) {
-  // Check if Twilio is properly configured
   if (!process.env.TWILIO_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_PHONE || process.env.TWILIO_SID === 'your_twilio_sid') {
     console.warn('WhatsApp: Twilio credentials not configured. Skipping WhatsApp.');
     return false;
   }
 
-  // Clean phone number (remove any non-digit characters)
   const cleanedPhone = toPhone.replace(/\D/g, '');
-  // Format with +91 if not already there (assuming Indian numbers for now)
   const finalPhone = cleanedPhone.length === 10 ? `+91${cleanedPhone}` : `+${cleanedPhone}`;
 
   const client = twilio(process.env.TWILIO_SID, process.env.TWILIO_AUTH_TOKEN);
@@ -170,7 +185,6 @@ app.post('/api/send-details', async (req, res) => {
     let emailSent = false;
     let whatsappSent = false;
 
-    // STEP 1: Try Email
     try {
       emailSent = await sendEmailWithPhoto(user.fullName, user.phone, user.gmail, user.lastPhotoPath);
     } catch (err) {
@@ -178,7 +192,6 @@ app.post('/api/send-details', async (req, res) => {
       emailSent = false;
     }
 
-    // STEP 2: Try WhatsApp
     try {
       whatsappSent = await sendWhatsAppWithPhoto(user.fullName, user.phone, user.phone, user.lastPhotoPath);
     } catch (err) {
@@ -194,7 +207,7 @@ app.post('/api/send-details', async (req, res) => {
   }
 });
 
-// Send Details Route V2 (with Firebase URL)
+// ✅ FIXED V2: Send Details Route V2 (with Firebase URL)
 app.post('/api/send-details-v2', async (req, res) => {
   try {
     const { userId, photoUrl } = req.body;
@@ -206,64 +219,76 @@ app.post('/api/send-details-v2', async (req, res) => {
     user.lastPhotoPath = photoUrl;
     await user.save();
 
-    let emailSent = false;
-    let whatsappSent = false;
+    // Respond immediately to the client to make it feel fast
+    res.status(200).json({ 
+      message: 'Processing delivery in background',
+      photoUrl: photoUrl
+    });
 
-    // STEP 1: Always Try Gmail First with explicit SMTP config
-    try {
-      const transporter = nodemailer.createTransport({
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true,
-        auth: {
-          user: process.env.GMAIL_USER,
-          pass: process.env.GMAIL_PASS
-        }
-      });
+    // Send Email and WhatsApp in background (not awaited by the response)
+    (async () => {
+      try {
+        const results = await Promise.allSettled([
+          // Task 1: Email - FIXED (without attachment for URL)
+          (async () => {
+            if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS || process.env.GMAIL_USER === 'your_gmail@gmail.com') {
+              console.warn('Email skipped: Credentials missing');
+              return;
+            }
+            await transporter.sendMail({
+              from: `"AI Booth" <${process.env.GMAIL_USER}>`,
+              to: user.gmail,
+              subject: 'Your AI Booth Photo 📸',
+              text: `Hello ${user.fullName},\n\nThank you for using AI Booth! Here is your photo: ${photoUrl}\n\nRegards,\nAI Booth Team`,
+              html: `
+                <div style="font-family: Arial, sans-serif; max-width: 500px;">
+                  <h2>Hello ${user.fullName}! 👋</h2>
+                  <p>Thank you for using <b>AI Booth</b>!</p>
+                  <p>Your photo is ready:</p>
+                  <div style="margin: 20px 0;">
+                    <img src="${photoUrl}" style="max-width: 100%; border-radius: 10px;" />
+                  </div>
+                  <p><a href="${photoUrl}" style="background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px;">📥 Download Photo</a></p>
+                  <p>Regards,<br>AI Booth Team</p>
+                </div>
+              `
+            });
+            console.log(`✅ Email sent to ${user.gmail}`);
+          })(),
 
-      await transporter.verify();
-      console.log('Gmail transporter is ready');
+          // Task 2: WhatsApp
+          (async () => {
+            const twilioSid = process.env.TWILIO_SID;
+            const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+            const twilioPhone = process.env.TWILIO_PHONE;
+            if (!twilioSid || !twilioToken || !twilioPhone) {
+              console.warn('WhatsApp skipped: Credentials missing');
+              return;
+            }
 
-      await transporter.sendMail({
-        from: `AI Booth <${process.env.GMAIL_USER}>`,
-        to: user.gmail,
-        subject: 'Your AI Booth Photo 📸',
-        text: `Hello ${user.fullName},\n\nThank you for using AI Booth! Here is your photo: ${photoUrl}`
-      });
-      emailSent = true;
-      console.log('Email sent successfully');
-    } catch (err) {
-      console.error('Email failed:', err.message);
-      emailSent = false;
-    }
-
-    // STEP 2: Only Try WhatsApp if Email Failed OR Always Try both (as fallback safety)
-    // User said: "gmail send kare ge woh receive nahi hua to whasapp"
-    // We will attempt WhatsApp regardless to ensure delivery, but logically 
-    // it acts as the primary fallback if email failed.
-    try {
-      const twilioSid = process.env.TWILIO_SID;
-      const twilioToken = process.env.TWILIO_AUTH_TOKEN;
-      const twilioPhone = process.env.TWILIO_PHONE;
-
-      const cleanedPhone = user.phone.replace(/\D/g, '');
-      const finalPhone = cleanedPhone.length === 10 ? `+91${cleanedPhone}` : `+${cleanedPhone}`;
-      
-      const client = twilio(twilioSid, twilioToken);
-      await client.messages.create({
-        from: `whatsapp:${twilioPhone}`,
-        to: `whatsapp:${finalPhone}`,
-        body: `Hello ${user.fullName}!\n\nThank you for using AI Booth. Here is your photo: ${photoUrl}`,
-        mediaUrl: [photoUrl] 
-      });
-      whatsappSent = true;
-      console.log('WhatsApp sent successfully');
-    } catch (err) {
-      console.error('WhatsApp failed:', err.message);
-      whatsappSent = false;
-    }
-
-    res.status(200).json({ emailSent, whatsappSent });
+            const cleanedPhone = user.phone.replace(/\D/g, '');
+            const finalPhone = cleanedPhone.length === 10 ? `+91${cleanedPhone}` : `+${cleanedPhone}`;
+            
+            const client = twilio(twilioSid, twilioToken);
+            await client.messages.create({
+              from: `whatsapp:${twilioPhone}`,
+              to: `whatsapp:${finalPhone}`,
+              body: `Hello ${user.fullName}! 👋\n\nYour AI Booth photo is ready:\n${photoUrl}\n\nThank you for using AI Booth! 📸`,
+              mediaUrl: [photoUrl] 
+            });
+            console.log(`✅ WhatsApp sent to ${finalPhone}`);
+          })()
+        ]);
+        
+        results.forEach((result, index) => {
+          if (result.status === 'rejected') {
+            console.error(`${index === 0 ? 'Email' : 'WhatsApp'} failed in background:`, result.reason.message);
+          }
+        });
+      } catch (err) {
+        console.error('Background delivery error:', err);
+      }
+    })();
 
   } catch (error) {
     console.error('Send details V2 error:', error);
@@ -271,6 +296,6 @@ app.post('/api/send-details-v2', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
