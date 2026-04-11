@@ -7,6 +7,10 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const nodemailer = require('nodemailer');
 const twilio = require('twilio');
+const dns = require('dns');
+
+// ✅ Force IPv4 (Important for Railway)
+dns.setDefaultResultOrder('ipv4first');
 
 dotenv.config();
 
@@ -46,9 +50,10 @@ if (!MONGO_URI) {
 }
 
 mongoose.connect(MONGO_URI, {
-  serverSelectionTimeoutMS: 10000
+  serverSelectionTimeoutMS: 10000,
+  family: 4 // ✅ Force IPv4 for MongoDB
 })
-  .then(() => console.log('Connected to MongoDB Successfully'))
+  .then(() => console.log('✅ Connected to MongoDB Successfully'))
   .catch(err => {
     console.error('MongoDB connection error:', err.message);
     process.exit(1);
@@ -65,7 +70,7 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model('User', userSchema);
 
-// ✅ FIXED: Reuse Nodemailer transporter with CORRECT SMTP config
+// ✅ FIXED: Gmail Transporter with IPv4 and better config
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
@@ -78,10 +83,18 @@ const transporter = nodemailer.createTransport({
     pass: process.env.GMAIL_PASS
   },
   timeout: 60000,
-  connectionTimeout: 60000
+  connectionTimeout: 60000,
+  socketTimeout: 60000,
+  // ✅ Force IPv4
+  family: 4,
+  // ✅ Better TLS settings
+  tls: {
+    rejectUnauthorized: false,
+    ciphers: 'SSLv3'
+  }
 });
 
-// ✅ Verify transporter connection
+// Verify transporter connection
 transporter.verify((error, success) => {
   if (error) {
     console.error('❌ Gmail Transporter Error:', error.message);
@@ -207,7 +220,7 @@ app.post('/api/send-details', async (req, res) => {
   }
 });
 
-// ✅ FIXED V2: Send Details Route V2 (with Firebase URL)
+// ✅ FIXED V2: Send Details Route V2 with IPv4 fix
 app.post('/api/send-details-v2', async (req, res) => {
   try {
     const { userId, photoUrl } = req.body;
@@ -219,23 +232,41 @@ app.post('/api/send-details-v2', async (req, res) => {
     user.lastPhotoPath = photoUrl;
     await user.save();
 
-    // Respond immediately to the client to make it feel fast
+    // Respond immediately to the client
     res.status(200).json({ 
       message: 'Processing delivery in background',
       photoUrl: photoUrl
     });
 
-    // Send Email and WhatsApp in background (not awaited by the response)
+    // Send Email and WhatsApp in background
     (async () => {
       try {
+        // ✅ Create a new transporter for background task with IPv4
+        const bgTransporter = nodemailer.createTransport({
+          host: 'smtp.gmail.com',
+          port: 587,
+          secure: false,
+          auth: {
+            user: process.env.GMAIL_USER,
+            pass: process.env.GMAIL_PASS
+          },
+          timeout: 60000,
+          connectionTimeout: 60000,
+          family: 4, // ✅ Force IPv4
+          tls: {
+            rejectUnauthorized: false
+          }
+        });
+
         const results = await Promise.allSettled([
-          // Task 1: Email - FIXED (without attachment for URL)
+          // Task 1: Email
           (async () => {
-            if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS || process.env.GMAIL_USER === 'your_gmail@gmail.com') {
+            if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS) {
               console.warn('Email skipped: Credentials missing');
               return;
             }
-            await transporter.sendMail({
+            console.log(`Attempting to send email to ${user.gmail}...`);
+            await bgTransporter.sendMail({
               from: `"AI Booth" <${process.env.GMAIL_USER}>`,
               to: user.gmail,
               subject: 'Your AI Booth Photo 📸',
@@ -253,7 +284,7 @@ app.post('/api/send-details-v2', async (req, res) => {
                 </div>
               `
             });
-            console.log(`✅ Email sent to ${user.gmail}`);
+            console.log(`✅ Email sent successfully to ${user.gmail}`);
           })(),
 
           // Task 2: WhatsApp
@@ -282,7 +313,7 @@ app.post('/api/send-details-v2', async (req, res) => {
         
         results.forEach((result, index) => {
           if (result.status === 'rejected') {
-            console.error(`${index === 0 ? 'Email' : 'WhatsApp'} failed in background:`, result.reason.message);
+            console.error(`${index === 0 ? 'Email' : 'WhatsApp'} failed:`, result.reason?.message || result.reason);
           }
         });
       } catch (err) {
