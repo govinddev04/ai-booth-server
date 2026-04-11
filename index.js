@@ -12,6 +12,7 @@ dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+
 // Proper CORS for production
 app.use(cors({
   origin: '*', // You can restrict this later to your Vercel URL
@@ -43,6 +44,7 @@ mongoose.connect(MONGO_URI, {
     console.error('❌ MongoDB connection error:', err.message);
     process.exit(1);
   });
+
 app.get("/", (req, res) => {
   res.send("Backend is running");
 });
@@ -50,6 +52,7 @@ app.get("/", (req, res) => {
 app.get("/health", (req, res) => {
   res.json({ ok: true });
 });
+
 // Schema
 const userSchema = new mongoose.Schema({
   fullName: String,
@@ -206,22 +209,26 @@ app.post('/api/send-details-v2', async (req, res) => {
     let emailSent = false;
     let whatsappSent = false;
 
-    // STEP 1: Always Try Gmail First
+    // STEP 1: Always Try Gmail First with explicit SMTP config
     try {
       const transporter = nodemailer.createTransport({
-        service: 'gmail',
+        host: 'smtp.gmail.com',
+        port: 465,
+        secure: true,
         auth: {
           user: process.env.GMAIL_USER,
           pass: process.env.GMAIL_PASS
         }
       });
 
+      await transporter.verify();
+      console.log('Gmail transporter is ready');
+
       await transporter.sendMail({
         from: `AI Booth <${process.env.GMAIL_USER}>`,
         to: user.gmail,
         subject: 'Your AI Booth Photo 📸',
-        text: `Hello ${user.fullName},\n\nThank you for using AI Booth! Here is your photo: ${photoUrl}`,
-        attachments: [{ filename: 'photo.png', path: photoUrl }]
+        text: `Hello ${user.fullName},\n\nThank you for using AI Booth! Here is your photo: ${photoUrl}`
       });
       emailSent = true;
       console.log('Email sent successfully');
