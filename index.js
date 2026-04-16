@@ -152,17 +152,20 @@ async function sendEmailWithPhoto(fullName, phone, toEmail, photoUrl) {
   try {
     // Create transporter with correct Gmail SMTP settings
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
+      host: '74.125.137.108', // Direct IPv4 address for smtp.gmail.com
       port: 465,
-      secure: true, // Use SSL
+      secure: true,
       auth: {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_PASS
       },
-      // Add timeout and debug options
-      connectionTimeout: 30000,
-      greetingTimeout: 30000,
-      socketTimeout: 30000,
+      tls: {
+        rejectUnauthorized: false
+      },
+      name: 'smtp.gmail.com',
+      connectionTimeout: 30000, 
+      greetingTimeout: 30000, 
+      socketTimeout: 30000
     });
 
     // Verify connection
