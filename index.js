@@ -137,12 +137,20 @@ async function downloadImage(url, outputPath) {
   }
 }
 
-// Helper function for sending Email with Photo (FIXED)
+// Configure email transporter (global)
+const emailTransporter = nodemailer.createTransport({
+  service: 'gmail',
+  auth: {
+    user: process.env.GMAIL_USER,
+    pass: process.env.GMAIL_PASS
+  }
+});
+
+// Helper function for sending Email with Photo (UPDATED with your requested format)
 async function sendEmailWithPhoto(fullName, phone, toEmail, photoUrl) {
   // Check Gmail configuration
   if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS || 
-      process.env.GMAIL_USER === 'your_gmail@gmail.com' ||
-      process.env.GMAIL_PASS === 'your_app_password') {
+      process.env.GMAIL_USER === 'your_gmail@gmail.com') {
     console.warn('⚠️ Email: GMAIL credentials not configured properly. Skipping email.');
     console.warn('GMAIL_USER:', process.env.GMAIL_USER ? 'Set' : 'Missing');
     console.warn('GMAIL_PASS:', process.env.GMAIL_PASS ? 'Set' : 'Missing');
@@ -150,77 +158,36 @@ async function sendEmailWithPhoto(fullName, phone, toEmail, photoUrl) {
   }
 
   try {
-    // Create transporter with correct Gmail SMTP settings
-    const transporter = nodemailer.createTransport({
-      host: '74.125.137.108', // Direct IPv4 address for smtp.gmail.com
-      port: 465,
-      secure: true,
-      auth: {
-        user: process.env.GMAIL_USER,
-        pass: process.env.GMAIL_PASS
-      },
-      tls: {
-        rejectUnauthorized: false
-      },
-      name: 'smtp.gmail.com',
-      connectionTimeout: 30000, 
-      greetingTimeout: 30000, 
-      socketTimeout: 30000
-    });
-
-    // Verify connection
-    await transporter.verify();
-    console.log('✅ Gmail transporter is ready');
-
-    // Create a temporary file for the attachment
-    const tempFileName = `${uuidv4()}.png`;
-    const tempFilePath = path.join(__dirname, 'uploads', 'temp', tempFileName);
-    
-    // Ensure temp directory exists
-    const tempDir = path.join(__dirname, 'uploads', 'temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
+    // Task 1: Email - Download image as Buffer first to avoid Nodemailer URL fetching errors
+    let attachmentContent;
+    try {
+      // Construct full URL if needed
+      const fullPhotoUrl = photoUrl.startsWith('http') ? photoUrl : `${process.env.BASE_URL || 'https://your-domain.com'}${photoUrl}`;
+      
+      const response = await fetch(fullPhotoUrl);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      const arrayBuffer = await response.arrayBuffer();
+      attachmentContent = Buffer.from(arrayBuffer);
+      console.log('✅ Image downloaded successfully, size:', attachmentContent.length, 'bytes');
+    } catch (fetchErr) {
+      console.error('Failed to download image for email attachment:', fetchErr);
+      throw fetchErr; // Fail this promise so it logs below
     }
 
-    // Download or copy the image to temp location
-    await downloadImage(photoUrl, tempFilePath);
-    console.log('✅ Image prepared for attachment:', tempFilePath);
-
-    // Send email with attachment
-    const mailOptions = {
-      from: `"AI Booth" <${process.env.GMAIL_USER}>`,
+    // Send email using the global transporter
+    await emailTransporter.sendMail({
+      from: `AI Booth <${process.env.GMAIL_USER}>`,
       to: toEmail,
       subject: 'Your AI Booth Photo 📸',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Hello ${fullName}! 👋</h2>
-          <p>Thank you for using AI Booth!</p>
-          <p>Your photo is attached to this email.</p>
-          <p>You can also view it online at: <a href="${photoUrl}">${photoUrl}</a></p>
-          <br>
-          <p>Best regards,<br>AI Booth Team</p>
-        </div>
-      `,
-      attachments: [
-        {
-          filename: 'ai-booth-photo.png',
-          path: tempFilePath,
-          cid: 'unique@photo.cid' // Optional: for embedding
-        }
-      ]
-    };
-
-    const info = await transporter.sendMail(mailOptions);
-    console.log('✅ Email sent successfully:', info.messageId);
+      text: `Hello ${fullName},\n\nThank you for using AI Booth! Here is your photo: ${photoUrl}`,
+      attachments: [{ filename: 'photo.png', content: attachmentContent }]
+    });
     
-    // Clean up temp file
-    try {
-      fs.unlinkSync(tempFilePath);
-    } catch (err) {
-      console.warn('Could not delete temp file:', err.message);
-    }
-    
+    console.log(`✅ Email sent to ${toEmail}`);
     return true;
+    
   } catch (error) {
     console.error('❌ Email sending failed:', error.message);
     if (error.code === 'EAUTH') {
@@ -271,7 +238,7 @@ async function sendWhatsAppWithPhoto(fullName, phone, toPhone, photoUrl) {
   }
 }
 
-// Send Details Route V2 (with Firebase URL) - FIXED
+// Send Details Route V2 (with Firebase URL) - UPDATED
 app.post('/api/send-details-v2', async (req, res) => {
   try {
     const { userId, photoUrl } = req.body;
@@ -290,7 +257,7 @@ app.post('/api/send-details-v2', async (req, res) => {
     let emailSent = false;
     let whatsappSent = false;
 
-    // STEP 1: Try Email First (Primary)
+    // STEP 1: Try Email First (Primary) - Using your requested email function
     console.log('📧 Attempting to send email...');
     emailSent = await sendEmailWithPhoto(user.fullName, user.phone, user.gmail, photoUrl);
     
@@ -332,9 +299,7 @@ app.post('/api/test-email', async (req, res) => {
     }
 
     const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com',
-      port: 465,
-      secure: true,
+      service: 'gmail',
       auth: {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_PASS
