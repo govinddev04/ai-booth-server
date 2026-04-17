@@ -143,7 +143,10 @@ const emailTransporter = nodemailer.createTransport({
   auth: {
     user: process.env.GMAIL_USER,
     pass: process.env.GMAIL_PASS
-  }
+  },
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 15000
 });
 
 // Helper function for sending Email with Photo (UPDATED with your requested format)
@@ -164,15 +167,14 @@ async function sendEmailWithPhoto(fullName, phone, toEmail, photoUrl) {
       // Construct full URL if needed
       const fullPhotoUrl = photoUrl.startsWith('http') ? photoUrl : `${process.env.BASE_URL || 'https://your-domain.com'}${photoUrl}`;
       
-      const response = await fetch(fullPhotoUrl);
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-      const arrayBuffer = await response.arrayBuffer();
-      attachmentContent = Buffer.from(arrayBuffer);
+      const response = await axios.get(fullPhotoUrl, {
+        responseType: 'arraybuffer',
+        timeout: 10000
+      });
+      attachmentContent = Buffer.from(response.data);
       console.log('✅ Image downloaded successfully, size:', attachmentContent.length, 'bytes');
     } catch (fetchErr) {
-      console.error('Failed to download image for email attachment:', fetchErr);
+      console.error('Failed to download image for email attachment:', fetchErr.message);
       throw fetchErr; // Fail this promise so it logs below
     }
 
@@ -240,6 +242,13 @@ async function sendWhatsAppWithPhoto(fullName, phone, toPhone, photoUrl) {
 
 // Send Details Route V2 (with Firebase URL) - UPDATED
 app.post('/api/send-details-v2', async (req, res) => {
+  // Clear cache
+  res.set({
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+
   try {
     const { userId, photoUrl } = req.body;
     console.log(`📸 Processing send-details-v2 for User: ${userId}`);
@@ -291,6 +300,13 @@ app.post('/api/send-details-v2', async (req, res) => {
 
 // Test email configuration endpoint
 app.post('/api/test-email', async (req, res) => {
+  // Clear cache
+  res.set({
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0'
+  });
+
   try {
     const { testEmail } = req.body;
     
@@ -303,7 +319,10 @@ app.post('/api/test-email', async (req, res) => {
       auth: {
         user: process.env.GMAIL_USER,
         pass: process.env.GMAIL_PASS
-      }
+      },
+      connectionTimeout: 10000,
+      greetingTimeout: 10000,
+      socketTimeout: 15000
     });
 
     await transporter.verify();
