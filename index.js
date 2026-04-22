@@ -277,9 +277,9 @@ app.post('/api/send-details-v2', async (req, res) => {
 
       // Task 2: WhatsApp
       (async () => {
-        let twilioSid = process.env.TWILIO_SID;
-        const twilioToken = process.env.TWILIO_AUTH_TOKEN;
-        const twilioPhone = process.env.TWILIO_PHONE;
+        let twilioSid = process.env.TWILIO_SID?.trim();
+        const twilioToken = process.env.TWILIO_AUTH_TOKEN?.trim();
+        const twilioPhone = process.env.TWILIO_PHONE?.trim();
         
         // Safeguard: Ensure SID starts with AC
         if (twilioSid && !twilioSid.startsWith('AC')) {
