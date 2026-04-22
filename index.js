@@ -236,74 +236,103 @@ app.post('/api/send-details-v2', async (req, res) => {
     let emailSent = false;
     let whatsappSent = false;
 
+    // PRE-DOWNLOAD IMAGE: We do this once to share between email and whatsapp
+    let imageBuffer = null;
     try {
-      const results = await Promise.allSettled([
-        // Task 1: Email
-        (async () => {
-          if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS || process.env.GMAIL_USER === 'your_gmail@gmail.com') {
-            throw new Error('Gmail credentials missing');
-          }
-          
-          let attachmentContent;
-          try {
-            const response = await fetch(photoUrl);
-            const arrayBuffer = await response.arrayBuffer();
-            attachmentContent = Buffer.from(arrayBuffer);
-          } catch (fetchErr) {
-            console.error('Failed to download image for email attachment:', fetchErr);
-            throw fetchErr;
-          }
+      console.log(`Attempting to download image: ${photoUrl}`);
+      const imageResponse = await fetch(photoUrl);
+      if (imageResponse.ok) {
+        const arrayBuffer = await imageResponse.arrayBuffer();
+        imageBuffer = Buffer.from(arrayBuffer);
+        console.log("Image downloaded successfully");
+      } else {
+        console.warn(`Failed to download image: ${imageResponse.statusText}. Will try sending without attachment.`);
+      }
+    } catch (downloadErr) {
+      console.error(`Error downloading image: ${downloadErr.message}. Proceeding without attachment.`);
+    }
 
-          await transporter.sendMail({
-            from: `AI Booth <${process.env.GMAIL_USER}>`,
-            to: user.gmail,
-            subject: 'Your AI Booth Photo 📸',
-            text: `Hello ${user.fullName},\n\nThank you for using AI Booth! Here is your photo: ${photoUrl}`,
-            attachments: [{ filename: 'photo.png', content: attachmentContent }]
-          });
-          console.log(`Email sent to ${user.gmail}`);
-          return true;
-        })(),
+    const results = await Promise.allSettled([
+      // Task 1: Email
+      (async () => {
+        if (!process.env.GMAIL_USER || !process.env.GMAIL_PASS || process.env.GMAIL_USER === 'your_gmail@gmail.com') {
+          throw new Error('Gmail credentials missing');
+        }
+        
+        const mailOptions = {
+          from: `AI Booth <${process.env.GMAIL_USER}>`,
+          to: user.gmail,
+          subject: 'Your AI Booth Photo 📸',
+          text: `Hello ${user.fullName},\n\nThank you for using AI Booth! Here is your photo: ${photoUrl}`,
+        };
 
-        // Task 2: WhatsApp
-        (async () => {
-          const twilioSid = process.env.TWILIO_SID;
-          const twilioToken = process.env.TWILIO_AUTH_TOKEN;
-          const twilioPhone = process.env.TWILIO_PHONE;
-          if (!twilioSid || !twilioToken || !twilioPhone) {
-            throw new Error('Twilio credentials missing');
-          }
+        if (imageBuffer) {
+          mailOptions.attachments = [{ filename: 'photo.png', content: imageBuffer }];
+        }
 
-          const cleanedPhone = user.phone.replace(/\D/g, '');
-          const finalPhone = cleanedPhone.length === 10 ? `+91${cleanedPhone}` : `+${cleanedPhone}`;
-          
-          const client = twilio(twilioSid, twilioToken);
+        await transporter.sendMail(mailOptions);
+        console.log(`Email sent to ${user.gmail}`);
+        return true;
+      })(),
+
+      // Task 2: WhatsApp
+      (async () => {
+        let twilioSid = process.env.TWILIO_SID;
+        const twilioToken = process.env.TWILIO_AUTH_TOKEN;
+        const twilioPhone = process.env.TWILIO_PHONE;
+        
+        // Safeguard: Ensure SID starts with AC
+        if (twilioSid && !twilioSid.startsWith('AC')) {
+          twilioSid = 'AC' + twilioSid;
+        }
+
+        if (!twilioSid || !twilioToken || !twilioPhone) {
+          throw new Error('Twilio credentials missing');
+        }
+
+        const cleanedPhone = user.phone.replace(/\D/g, '');
+        const finalPhone = cleanedPhone.length === 10 ? `+91${cleanedPhone}` : `+${cleanedPhone}`;
+        
+        const client = twilio(twilioSid, twilioToken);
+        
+        // Try with Media first
+        try {
+          console.log(`WhatsApp: Attempting with media for ${finalPhone}`);
           await client.messages.create({
             from: `whatsapp:${twilioPhone}`,
             to: `whatsapp:${finalPhone}`,
             body: `Hello ${user.fullName}!\n\nThank you for using AI Booth. Here is your photo: ${photoUrl}`,
             mediaUrl: [photoUrl] 
           });
-          console.log(`WhatsApp sent to ${finalPhone}`);
+          console.log(`WhatsApp (with media) sent to ${finalPhone}`);
           return true;
-        })()
-      ]);
+        } catch (twilioErr) {
+          console.error(`Twilio Media Error for ${finalPhone}:`, twilioErr.message);
+          
+          // FALLBACK: Send without media
+          console.log(`WhatsApp: Attempting fallback (no-media) for ${finalPhone}`);
+          await client.messages.create({
+            from: `whatsapp:${twilioPhone}`,
+            to: `whatsapp:${finalPhone}`,
+            body: `Hello ${user.fullName}!\n\nYour photo is ready: ${photoUrl}\n\n(Note: Photo attachment failed, but you can click the link above.)`,
+          });
+          console.log(`WhatsApp (no-media) sent to ${finalPhone}`);
+          return "fallback";
+        }
+      })()
+    ]);
       
-      // Check results
-      if (results[0].status === 'fulfilled') {
-        emailSent = true;
-      } else {
-        console.error('Email failed:', results[0].reason);
-      }
+    // Check results
+    if (results[0].status === 'fulfilled') {
+      emailSent = true;
+    } else {
+      console.error('Email failed:', results[0].reason);
+    }
 
-      if (results[1].status === 'fulfilled') {
-        whatsappSent = true;
-      } else {
-        console.error('WhatsApp failed:', results[1].reason);
-      }
-
-    } catch (err) {
-      console.error('Delivery error:', err);
+    if (results[1].status === 'fulfilled') {
+      whatsappSent = true;
+    } else {
+      console.error('WhatsApp failed:', results[1].reason);
     }
 
     // Now send the actual response back to the frontend
